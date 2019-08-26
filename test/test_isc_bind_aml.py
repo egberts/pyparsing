@@ -158,65 +158,47 @@ addr = Word(alphanums + '_-./:').setResultsName('addr').setName('<addr>')
 semicolon, lbrack, rbrack = map(Suppress, ';{}')
 exclamation = Char('!')
 
-addr_choices_series = Group(
-    ZeroOrMore(
-        Group(
-            Optional(exclamation)('not')
-            + addr
-            + semicolon
-        )
-    )
-)('addr_series')
-
 aml_nesting = Forward()
 aml_nesting << (
-    (
-            (
-                    Optional(exclamation('not'))
-                    - lbrack
-                    - aml_nesting
-                    - rbrack
-                    - semicolon
-            )
-            | (
-                #            Group(
-                ZeroOrMore(
-                    #                    Group(
-                    Optional(exclamation)('not')
-                    + addr_choices_series
-                    + semicolon
-                    #                    )
-                )
-                #            )
-                # | addr_choices_series
-            )
-    )
-)('aml_nesting')  # ('addr_choices_forward*')
-
-addr_first_nest_list = (
-    (
-        # first nesting has no exclamation outside of its curly braces.
-            lbrack
-            - (
+    lbrack
+    + (
+        ZeroOrMore(
+            Group(
                 (
-                    Group(
-                        addr_choices_series
-#                        aml_nesting
-                    )
+                    exclamation('not')
+                    + aml_nesting
                 )
-            )
-            + rbrack
-            + semicolon
-    )
-)('aml_series')
+                | (
+                    exclamation('not')
+                    + addr
+                    + semicolon
+                )
+                | (
+                    aml_nesting
+                )
+                | (
+                    addr
+                    + semicolon
+                )  # never set a ResultsLabel here, you get duplicate but un-nested 'addr'
+            )  # never set a ResultsLabel here, you get no []
+        )(None)
+    )('aml_nesting')
+    + rbrack
+    + semicolon
+)(None)  # ResultsLabel here didn't force a list, one before here did.
 
 clause_stmt_acl_standalone = (
-    (
-            Literal('acl').suppress()
-            + Word(alphanums + '_-')('acl_name')
-            + addr_first_nest_list
-    )
-)
+        Literal('acl').suppress()
+        + Word(alphanums + '_-')('acl_name')
+        + (
+            ZeroOrMore(
+                Group(
+
+                    aml_nesting(None)  # peel away testing label here
+                )  # ('aml_series3')
+            )('aml_series')
+        )(None)
+)(None)
 
 # Syntax:
 #         acl a { b; };  acl c { d; e; f; }; acl g { ! h; ! { i; }; };
@@ -231,33 +213,32 @@ clause_stmt_acl_series = ZeroOrMore(
 #  Unit tests of ACL statements
 #######################################################
 # Null tests
-assertParseElementTrue(aml_nesting, ' ', {'aml_nesting': []})  # something to aml_nesting
-assertParseElementTrue(addr_choices_series, ' ', {'addr_series': []})  # False; always supply something to aml_nesting
+assertParseElementFalse(aml_nesting, '', {'aml_nesting': []})  # something to aml_nesting
 assertParseElementFalse(clause_stmt_acl_standalone, ' ', {})  # this always expects an ACL statement
 assertParseElementTrue(clause_stmt_acl_series, ' ', {})  # check for null
 
 # A simple ACL element
 assertParseElementTrue(
-    addr_choices_series,
-    'only_element;',
+    aml_nesting,
+    '{ only_element; };',
     {
-        'addr_series': [
+        'aml_nesting': [
             {'addr': 'only_element'},
             ]})
 # A simple not ACL element
 assertParseElementTrue(
-    addr_choices_series,
-    '! only_element;',
+    aml_nesting,
+    '{ ! only_element; };',
     {
-        'addr_series': [
+        'aml_nesting': [
             {'addr': 'only_element', 'not': '!'},
             ]})
 # A simple series of three ACL elements
 assertParseElementTrue(
-    addr_choices_series,
-    'element1; element2; element3;',
+    aml_nesting,
+    '{ element1; element2; element3; };',
     {
-        'addr_series': [
+        'aml_nesting': [
             {'addr': 'element1'},
             {'addr': 'element2'},
             {'addr': 'element3'},
@@ -265,10 +246,10 @@ assertParseElementTrue(
 
 # A simple series of three 'knotted' ACL elements
 assertParseElementTrue(
-    addr_choices_series,
-    '! not_element1; ! knot_element2; ! nyot_element3;',
+    aml_nesting,
+    '{ ! not_element1; ! knot_element2; ! nyot_element3; };',
     {
-        'addr_series': [
+        'aml_nesting': [
             {'addr': 'not_element1', 'not': '!'},
             {'addr': 'knot_element2', 'not': '!'},
             {'addr': 'nyot_element3', 'not': '!'},
@@ -276,51 +257,60 @@ assertParseElementTrue(
 
 # First nesting of a simple element
 assertParseElementTrue(
-    addr_first_nest_list,
+    aml_nesting,
     '{ cat_1; };',
     {
-        'aml_series': [
-            {
-                'addr_series': [
-                    {'addr': 'cat_1'},
-                    ]}
-        ]})
+        'aml_nesting': [
+            {'addr': 'cat_1'}
+        ]
+    }
+)
+# First not nesting of a simple element
+assertParseElementTrue(
+    aml_nesting,
+    '{ ! Not_cat_1; };',
+    {
+        'aml_nesting': [
+            {'addr': 'Not_cat_1', 'not': '!'}
+        ]
+    }
+)
 
 # First nesting of a simple element
 assertParseElementTrue(
-    addr_first_nest_list,
+    aml_nesting,
     '{ via_1; via_2; via_3; };',
     {
-        'aml_series': [{
-                'addr_series': [
+        'aml_nesting': [
                     {'addr': 'via_1'},
                     {'addr': 'via_2'},
                     {'addr': 'via_3'},
-                    ]}
         ]})
 
 # First nesting of a simple element
 assertParseElementTrue(
-    addr_first_nest_list,
+    aml_nesting,
     '{ boa_1; ! boa_2; boa_3; };',
     {
-        'aml_series': [
-            {
-                'addr_series': [
+        'aml_nesting': [
                     {'addr': 'boa_1'},
                     {'addr': 'boa_2', 'not': '!'},
                     {'addr': 'boa_3'},
-                    ]}
         ]}
 )
 
 # Simplest ACL statement
+assertParseElementTrue(
+    clause_stmt_acl_standalone,
+        'acl null { };',
+        {'acl_name': 'null', 'aml_series': [[]]}
+    )
 test_data = 'acl simplest { statement; };'
 expected_result = {
     'acl_name': 'simplest',
     'aml_series': [
         {
-            'addr_series': [
+            'aml_nesting': [
                 {'addr': 'statement'}
                 ]}
         ]}
@@ -329,12 +319,6 @@ assertParseElementTrue(clause_stmt_acl_standalone, test_data, expected_result)
 expected_result = {'acls': [expected_result]}  # add the series and retest
 assertParseElementTrue(clause_stmt_acl_series, test_data, expected_result)
 
-if progress:
-    assertParseElementTrue(
-        clause_stmt_acl_standalone,
-        'acl null { };',
-        {'acl_name': 'null', 'aml_series': []}
-    )
 # A simple statement using an exclamation ('!')
 assertParseElementTrue(
     clause_stmt_acl_series.setDebug(True),
@@ -345,7 +329,7 @@ assertParseElementTrue(
                 'acl_name': 'simplest_statement',
                 'aml_series': [
                     {
-                        'addr_series': [
+                        'aml_nesting': [
                             {'addr': 'simple_statement_w_exclamation', 'not': '!'}
                             ]}
                     ]}
@@ -360,7 +344,7 @@ assertParseElementTrue(
         'acl_name': 'single_statement',
         'aml_series': [
             {
-                'addr_series': [
+                'aml_nesting': [
                     {'addr': 'series'},
                     {'addr': 'of'},
                     {'addr': 'elements'},
@@ -378,7 +362,7 @@ assertParseElementTrue(
                 'acl_name': 'first_statement',
                 'aml_series': [
                     {
-                        'addr_series': [
+                        'aml_nesting': [
                             {'addr': 'element1'}
                             ]}
                 ]},
@@ -386,7 +370,7 @@ assertParseElementTrue(
                 'acl_name': 'second',
                 'aml_series': [
                     {
-                        'addr_series': [
+                        'aml_nesting': [
                             {'addr': 'element2'}
                             ]}
                 ]},
@@ -394,7 +378,7 @@ assertParseElementTrue(
                 'acl_name': 'third',
                 'aml_series': [
                     {
-                        'addr_series': [
+                        'aml_nesting': [
                             {'addr': 'element3'}
                         ]}
                 ]}
@@ -410,7 +394,7 @@ assertParseElementTrue(
                 'acl_name': 'new_series',
                 'aml_series': [
                     {
-                        'addr_series': [
+                        'aml_nesting': [
                             {'addr': 'master_nameservers'},
                             {'addr': 'slave_nameservers'}
                         ]}
@@ -427,7 +411,7 @@ assertParseElementTrue(
                 'acl_name': 'my_acl_name',
                 'aml_series': [
                     {
-                        'addr_series': [
+                        'aml_nesting': [
                             {'addr': 'master_nameservers'},
                             {'addr': 'slave_nameservers'},
                         ]},
@@ -436,7 +420,7 @@ assertParseElementTrue(
                 'acl_name': 'a',
                 'aml_series': [
                     {
-                        'addr_series': [
+                        'aml_nesting': [
                             {'addr': 'b'}
                         ]}
                 ]}
@@ -449,7 +433,7 @@ expected_result = {
             'acl_name': 'target_acl',
             'aml_series': [
                 {
-                    'addr_series': [
+                    'aml_nesting': [
                         {'addr': 'master_nameservers'},
                         {'addr': 'slave_nameservers', 'not': '!'}
                     ]}
@@ -458,7 +442,7 @@ expected_result = {
             'acl_name': 'a',
             'aml_series': [
                 {
-                    'addr_series': [
+                    'aml_nesting': [
                         {'addr': 'b', 'not': '!'}
                     ]}
             ]}
@@ -474,9 +458,7 @@ assertParseElementTrue(
     'acl transfer_bastions { };',
     {
         'acl_name': 'transfer_bastions',
-        'aml_series': [
-            {'addr_series': []}
-        ]}
+            'aml_series': [[]]}
 )
 assertParseElementTrue(
     clause_stmt_acl_standalone,
@@ -485,7 +467,7 @@ assertParseElementTrue(
         'acl_name': 'one',
         'aml_series': [
             {
-                'addr_series': [
+                'aml_nesting': [
                     {'addr': '1.1.1.1'}
                 ]}
         ]}
@@ -497,7 +479,7 @@ assertParseElementTrue(
         'acl_name': 'one',
         'aml_series': [
             {
-                'addr_series': [
+                'aml_nesting': [
                     {'addr': '23.23.23.23', 'not': '!'}
                 ]}
         ]}
@@ -509,7 +491,7 @@ assertParseElementTrue(
         'acl_name': 'one',
         'aml_series': [  # '[' supports series of 'aml'
             {  # '{' supports each elements';' within each 'aml'
-                'addr_series': [
+                'aml_nesting': [
                     {
                         'addr': '24.24.24.24',
                         'not': '!'
@@ -524,7 +506,7 @@ assertParseElementTrue(
         'acl_name': 'one',
         'aml_series': [
             {
-                'addr_series': [
+                'aml_nesting': [
                     {'addr': '8.8.8.8', 'not': '!'}
                 ]}
         ]}
@@ -536,7 +518,7 @@ assertParseElementTrue(
         'acl_name': 'aaa',
         'aml_series': [
             {
-                'addr_series': [
+                'aml_nesting': [
                     {'addr': 'bbb'}
                 ]}
         ]}
@@ -547,7 +529,7 @@ expected_result = {
     'acl_name': 'my_element_is_not',
     'aml_series': [
         {
-            'addr_series': [
+            'aml_nesting': [
                 {
                     'addr': 'knotted_element',
                     'not': '!'
@@ -581,9 +563,12 @@ assertParseElementTrue(
         'acl_name': 'nested_aml',
         'aml_series': [  # first set of curly braces
             {
-                'addr_series': [  # second set of curly braces
-                    {'acl_name': 'name_5015', 'not': ''},
-                    {'acl_name': 'name_5016', 'not': ''}
+                'aml_nesting': [  # second set of curly braces
+                    {'aml_nesting': [  # second set of curly braces
+                        {'addr': 'name_5015'},
+                        {'addr': 'name_5016'}
+                    ],
+                    'not': '!'}
                 ]}
         ]}
 )
@@ -613,16 +598,22 @@ expected_result = {
     'acl_name': 'nested_aml_nots',
     'aml_series': [
         {
-            'addr_series':
+            'aml_nesting': [
                 {
-                    'addr_series':
+                    'aml_nesting': [
                         {
-                            'acl_name': 'master_nameservers',
+                            'aml_nesting': [
+                                {
+                                    'addr': 'master_nameservers',
+                                    'not': '!'
+                                }
+                            ],
                             'not': '!'
                         },
+                    ],
                     'not': '!'
                 },
-            'not': '!'
+            ],
         },
     ],
 }
@@ -634,18 +625,20 @@ assertParseElementTrue(
     clause_stmt_acl_standalone,
     'acl a_set { sfirst_set; { second_set; sa_third_set; }; };',
     {
-        'acl_name': ' a_set',
-        'aml_series':
-            [
-                {'acl_name': 'sfirst_set', 'not': ''},
-                {
-                    'aml':
-                        [
-                            {'acl_name': 'second_set', 'not': ''},
-                            {'acl_name': 'sa_third_set', 'not': ''},
+        'acl_name': 'a_set',
+        'aml_series': [
+            {
+                'aml_nesting': [
+                    {'addr': 'sfirst_set'},
+                    {
+                        'aml_nesting': [
+                            {'addr': 'second_set'},
+                            {'addr': 'sa_third_set'},
                         ]
-                }
-            ]
+                    }
+                ]
+            }
+        ]
     }
 
 )
